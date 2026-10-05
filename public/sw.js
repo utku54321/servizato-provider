@@ -1,7 +1,7 @@
 // Offline support (only touches this app's own caches; the other Servizato apps share this site):
 // pages load from the network when online and from the cache when offline.
 const PREFIX = 'servizato-provider-';
-const CACHE = PREFIX + 'v1';
+const CACHE = PREFIX + 'v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -20,6 +20,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
+  // Only this site's own files. Cloud sync (Firestore/Firebase) streams must go straight to the network.
+  if (new URL(req.url).origin !== self.location.origin) return;
 
   // App pages: try the network first so updates show up, fall back to the cached app offline.
   if (req.mode === 'navigate') {
