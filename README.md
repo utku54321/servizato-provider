@@ -50,6 +50,23 @@ styles.css   design tokens and styles
 public/      app icons, manifest.webmanifest, sw.js
 ```
 
+## Cloud sync across phones (Firebase)
+
+The three apps can sync live across different phones through Firebase Firestore (free Spark plan is enough). Without it they still work, but only on one device.
+
+1. Go to https://console.firebase.google.com → **Add project** (e.g. `servizato`). Google Analytics is optional.
+2. **Build → Firestore Database → Create database** → pick a location (e.g. `asia-south1` Mumbai) → start in **production mode**.
+3. Firestore → **Rules** tab → paste the contents of `firestore.rules` → **Publish**.
+4. **Build → Authentication → Get started → Sign-in method → Anonymous → Enable**.
+5. **Project settings (gear) → Your apps → Web (`</>`)** → register an app → copy the `firebaseConfig` values.
+6. Paste them into `firebase-config.js` in **all three repos** (customer, provider, technician) and push. GitHub Pages redeploys automatically.
+
+Then open **Account / More** in any app: it should say **Live sync on**. A booking made on one phone appears in the Partner app on another phone, and the technician's progress, parts, photos and the payment flow back live.
+
+How it works: `backend.js` keeps two Firestore collections, `bookings` (written by the customer app) and `jobs` (provider + technician progress). `shared.js` reads and writes through it and falls back to browser storage when no config is set.
+
+> The demo rules let any app user read and write. Before real customers, add phone-OTP login and role-based rules (customers see only their bookings, providers only their jobs).
+
 ## Connecting a real backend later
 
 Replace the helpers in `shared.js` (`readJobs`, `patchJob`, `subscribe`) and the sample data in `samples.js` with API calls.

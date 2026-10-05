@@ -1,6 +1,12 @@
-// Shared demo link between the three Servizato apps (customer, provider, technician).
-// All three are served from the same site (utku54321.github.io), so they can read each
-// other's browser storage. Replace these helpers with backend API calls later.
+// Shared link between the three Servizato apps (customer, provider, technician).
+// With Firebase configured (firebase-config.js) the data lives in Firestore and syncs
+// live across phones. Without it, the apps fall back to shared browser storage on one
+// device (same site: utku54321.github.io), like the original demo.
+
+import * as cloud from './backend.js';
+
+export { syncLabel } from './backend.js';
+export const cloudEnabled = cloud.enabled;
 
 export const KEYS = {
   customer: 'servizato-customer-v2', // written by the customer app (bookings, payments, reviews)
@@ -19,12 +25,54 @@ const write = (key, value) => {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or blocked */ }
 };
 
-export const readCustomer = () => read(KEYS.customer, null);
-export const readJobs = () => read(KEYS.jobs, {});
+/**
+ * Customer bookings as seen by the provider and technician apps.
+ * Cloud mode: every customer's bookings (each carries customerName + address).
+ * Local mode: the one customer using this browser.
+ */
+export function readCustomer() {
+  if (cloud.enabled && cloud.remote.bookings) {
+    return { name: 'Customer', bookings: Object.values(cloud.remote.bookings) };
+  }
+  return read(KEYS.customer, null);
+}
+export const readJobs = () => (cloud.enabled && cloud.remote.jobs ? cloud.remote.jobs : read(KEYS.jobs, {}));
+
+/** Anonymous id for this customer device, so bookings from different phones stay apart. */
+function customerId() {
+  let id = read('servizato-customer-id', '');
+  if (!id) { id = 'c' + Math.random().toString(36).slice(2, 10); write('servizato-customer-id', id); }
+  return id;
+}
+
+const SYNCED = 'servizato-synced-bookings-v1';
+/**
+ * Customer app: publish this customer's bookings to the cloud (only the ones that changed).
+ * Bookings removed from the store (e.g. "Clear demo data") are deleted from the cloud too.
+ */
+export function syncBookings(store) {
+  if (!cloud.enabled) return;
+  const prev = read(SYNCED, {});
+  const next = {};
+  const cid = customerId();
+  (store.bookings || []).forEach((b) => {
+    const doc = { ...b, customerId: cid, customerName: store.name, address: b.address || store.address };
+    const sig = JSON.stringify(doc);
+    next[b.id] = sig.length + ':' + hash(sig);
+    if (prev[b.id] !== next[b.id]) cloud.saveBooking(b.id, doc);
+  });
+  Object.keys(prev).forEach((id) => { if (!next[id]) cloud.deleteBooking(id); });
+  write(SYNCED, next);
+}
+function hash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i += 1) h = (h * 31 + str.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
 
 /** Merge a patch into the shared record for one job. */
 export function patchJob(id, patch) {
-  const all = readJobs();
+  const all = { ...readJobs() };
   const prev = all[id] || {};
   all[id] = {
     ...prev,
@@ -32,15 +80,18 @@ export function patchJob(id, patch) {
     history: { ...(prev.history || {}), ...(patch.history || {}) },
     updatedAt: new Date().toISOString(),
   };
-  write(KEYS.jobs, all);
+  if (cloud.enabled) cloud.saveJob(id, { ...patch, updatedAt: all[id].updatedAt });
+  else write(KEYS.jobs, all);
   return all[id];
 }
 
 /** Remove shared records that match `test(id, record)` (used by "reset demo"). */
 export function removeJobs(test) {
-  const all = readJobs();
-  Object.keys(all).forEach((id) => { if (test(id, all[id])) delete all[id]; });
-  write(KEYS.jobs, all);
+  const all = { ...readJobs() };
+  Object.keys(all).forEach((id) => {
+    if (test(id, all[id])) { delete all[id]; if (cloud.enabled) cloud.deleteJob(id); }
+  });
+  if (!cloud.enabled) write(KEYS.jobs, all);
 }
 
 export function clearSharedJobs() {
@@ -55,7 +106,9 @@ export function subscribe(cb) {
   window.addEventListener('focus', cb);
   document.addEventListener('visibilitychange', onVisible);
   const timer = setInterval(cb, 4000);
+  const offRemote = cloud.onRemoteChange(cb);
   return () => {
+    offRemote();
     window.removeEventListener('storage', onStorage);
     window.removeEventListener('focus', cb);
     document.removeEventListener('visibilitychange', onVisible);
@@ -87,7 +140,7 @@ export function jobFromBooking(b, customer) {
   return {
     ...b,
     source: 'customer',
-    customerName: (customer && customer.name) || 'Customer',
+    customerName: b.customerName || (customer && customer.name) || 'Customer',
     address: b.address || (customer && customer.address),
   };
 }

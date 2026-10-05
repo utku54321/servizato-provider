@@ -3,7 +3,7 @@ import { Icon } from './icons.jsx';
 import {
   slots, providers, services, getCategory, getService, priceFor, money, billFor,
 } from './data.js';
-import { TECH_SHARE, PLATFORM_FEE } from './shared.js';
+import { TECH_SHARE, PLATFORM_FEE, syncLabel } from './shared.js';
 
 /* ---------- helpers ---------- */
 
@@ -578,6 +578,7 @@ export function MoreScreen({ provider, store, nav, actions, install }) {
           </section>
         )}
 
+        <SyncStatus />
         <section className="demo-box">
           <p><strong>Connected demo.</strong> Bookings made in the customer app for {provider.name} arrive under Requests. When you assign one, it goes to that technician in the Technician app, and the customer sees the progress.</p>
           <button type="button" className="btn btn-outline" onClick={actions.reset}>Reset demo data</button>
@@ -585,4 +586,10 @@ export function MoreScreen({ provider, store, nav, actions, install }) {
       </div>
     </div>
   );
+}
+
+/* ---------- Cloud sync status ---------- */
+function SyncStatus() {
+  const s = syncLabel();
+  return <p className={'sync-status ' + s.tone} role="status"><span className="sync-dot" aria-hidden="true" />{s.text}</p>;
 }

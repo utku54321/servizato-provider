@@ -1,0 +1,18 @@
+rules_version = '2';
+// Servizato demo rules: any signed-in app user (anonymous sign-in) can read and write
+// bookings and jobs. Fine for a pilot/demo. Before real customers, switch to phone-OTP
+// login and role-based rules (customer sees own bookings, provider sees its jobs, etc.).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /bookings/{id} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.resource.size() < 900000;
+      allow delete: if request.auth != null;
+    }
+    match /jobs/{id} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.resource.size() < 900000;
+      allow delete: if request.auth != null;
+    }
+  }
+}
