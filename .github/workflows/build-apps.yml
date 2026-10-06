@@ -1,0 +1,143 @@
+name: Build Android + iOS apps
+
+# Builds the React Native (Expo) app for both platforms on every push to main and
+# publishes the files as a GitHub release. Stable download links:
+#   https://github.com/<owner>/<repo>/releases/latest/download/<repo>.apk   (Android)
+#   https://github.com/<owner>/<repo>/releases/latest/download/<repo>.ipa   (iPhone, unsigned)
+#
+# Android: the APK is signed with Expo's standard key, so every new build installs over
+# the old one. To use your own key instead, add repository secrets ANDROID_KEYSTORE_BASE64,
+# ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS.
+#
+# iPhone: the .ipa is unsigned. Install it with Sideloadly (or AltStore) and a free
+# Apple ID; Apple makes free-account installs expire after 7 days.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apps
+  cancel-in-progress: true
+
+env:
+  APP: ${{ github.event.repository.name }}
+  BUILD_NUMBER: ${{ github.run_number }}
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install
+        run: npm ci
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+
+      - name: Sign APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+            "$ANDROID_HOME/build-tools/$BT/zipalign" -f -p 4 "$APK" aligned.apk
+            "$ANDROID_HOME/build-tools/$BT/apksigner" sign --ks "$RUNNER_TEMP/release.keystore" --ks-key-alias "$KS_ALIAS" \
+              --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS" --out "$APP.apk" aligned.apk
+            rm -f "$RUNNER_TEMP/release.keystore"
+          else
+            cp "$APK" "$APP.apk"
+          fi
+          ls -la "$APP.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: ${{ env.APP }}.apk
+
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # Expo SDK 57 needs Xcode 27 (macOS 26 runner)
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Generate iOS project (and CocoaPods)
+        run: npx expo prebuild --platform ios
+
+      - name: Build app (unsigned)
+        run: |
+          set -o pipefail
+          WS=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          xcodebuild -workspace "$WS" -scheme "$SCHEME" -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -derivedDataPath ios/build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build -quiet
+
+      - name: Package .ipa
+        run: |
+          APP_DIR=$(ls -d ios/build/Build/Products/Release-iphoneos/*.app | head -1)
+          mkdir -p Payload
+          cp -R "$APP_DIR" Payload/
+          zip -qry "$APP.ipa" Payload
+          ls -la "$APP.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: ${{ env.APP }}.ipa
+
+  release:
+    needs: [android, ios]
+    # Publish whatever built: an iOS failure should not hold back the Android app.
+    if: ${{ !cancelled() && (needs.android.result == 'success' || needs.ios.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: ls -la
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: ${{ env.APP }} (build ${{ github.run_number }})
+          body: |
+            **Android:** download **${{ env.APP }}.apk**, open it, and allow "Install unknown apps" for your browser or Files app when asked.
+
+            **iPhone:** download **${{ env.APP }}.ipa** on a Windows PC or Mac, then install it with [Sideloadly](https://sideloadly.io) and your Apple ID. With a free Apple ID the app works for 7 days; install it again after that.
+          files: |
+            ${{ env.APP }}.apk
+            ${{ env.APP }}.ipa
+          make_latest: true
